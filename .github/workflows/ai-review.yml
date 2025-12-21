@@ -1,115 +1,80 @@
-name: 🤖 AI Review - First Run
+name: 🤖 AI Review
 
 on:
-  # ТОЛЬКО ручной запуск для первого теста
+  # Ручной запуск пайплайна (можно заменить на on: pull_request)
   workflow_dispatch:
     inputs:
+      review-command:
+        type: choice
+        default: "run"
+        options: [ run, run-inline, run-context, run-summary ]
+        description: "Какой тип ревью запустить"
+
       pull-request-number:
         type: string
         required: true
-        description: "Номер Pull Request для теста"
+        description: "Номер Pull Request"
 
 jobs:
-  ai-review-test:
-    name: Test AI Review
+  ai-review:
+    name: Run AI Review
     runs-on: ubuntu-latest
-    
-    # Даем права на запись комментариев
-    permissions:
-      contents: read
-      pull-requests: write
 
-    # Запускаем Ollama в отдельном контейнере
+    # Поднимаем локальную LLM Ollama в фоне
     services:
       ollama:
         image: ollama/ollama:latest
         ports: [ 11434:11434 ]
-        options: >-
-          --memory=4g
-          --shm-size=2g
 
     steps:
-      # 1. Клонируем репозиторий
-      - name: 📥 Checkout code
+      # 1️⃣ Клонируем репозиторий
+      - name: 🧱 Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          
-      # 2. Ждем Ollama (с улучшенной проверкой)
-      - name: ⏳ Wait for Ollama
+          fetch-depth: 0  # нужно, чтобы видеть diff в PR
+
+      # 2️⃣ Ждём, пока Ollama поднимется
+      - name: ⏳ Wait for Ollama to start
         run: |
-          echo "🔄 Ожидание запуска Ollama..."
-          timeout 60 bash -c '
-            until curl -s http://localhost:11434/api/version > /dev/null; do
-              echo "Ожидание... ($SECONDS сек.)"
-              sleep 3
-            done
-          '
-          echo "✅ Ollama запущена!"
-          
-          # Проверяем, что API отвечает
-          curl -s http://localhost:11434/api/version
-          echo ""
-          
-      # 3. Загружаем ЛЕГКУЮ модель (для быстрого теста)
-      - name: 📦 Pull light model
+          echo "⏳ Ожидаем запуск Ollama..."
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:11434/api/version; then
+              echo "✅ Ollama готова!"
+              break
+            fi
+            sleep 3
+          done
+
+      # 3️⃣ Скачиваем выбранную модель (в примере — mistral)
+      - name: 📦 Pull model
         run: |
-          echo "⬇️ Загружаем модель 'phi3' (самая легкая для теста)..."
-          
-          # Пробуем phi3 - самая легкая модель
+          echo "📥 Загружаем модель 'mistral'..."
           curl -X POST http://localhost:11434/api/pull \
             -H "Content-Type: application/json" \
-            -d '{"model": "phi3", "stream": false}' \
-            --max-time 180 \
-            || echo "Продолжаем, даже если долго..."
-            
-          # Проверяем, что загрузилось
-          echo "📋 Список доступных моделей:"
-          curl -s http://localhost:11434/api/tags | jq -r '.models[].name' || echo "Модели еще загружаются"
-          
-      # 4. Быстрый прогрев модели
-      - name: 🔥 Quick warm-up
+            -d '{"model": "mistral"}'
+
+      # 4️⃣ Прогреваем модель (чтобы первый запрос не был долгим)
+      - name: 🔥 Warm up model
         run: |
-          echo "🔥 Прогреваем модель быстрым запросом..."
-          curl -s -X POST http://localhost:11434/api/generate \
+          echo "🔥 Прогреваем модель..."
+          curl -s -X POST http://localhost:11434/api/chat \
             -H "Content-Type: application/json" \
-            -d '{
-              "model": "phi3",
-              "prompt": "Hello. Reply only with word TEST_OK.",
-              "stream": false,
-              "options": {
-                "num_predict": 10
-              }
-            }' --max-time 30 \
-            || echo "Warm-up пропущен"
-          echo "✅ Готово"
-          
-      # 5. ЗАПУСКАЕМ AI REVIEW
+            -d '{"model":"mistral","stream":false,"messages":[{"role":"user","content":"Hello!"}]}'
+          echo "✅ Warm-up complete."
+
+      # 5️⃣ Запускаем ревью
       - name: 🚀 Run AI Review
+        # Укажите актуальную версию инструмента
         uses: Nikita-Filonov/ai-review@v0.27.0
         env:
-          # Токен GitHub (создается автоматически)
+          # GitHub токен для доступа к PR
           VCS__HTTP_CLIENT__API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-          # Контекст PR
+
+          # Контекст PR (репозиторий и номер)
           VCS__PIPELINE__OWNER: ${{ github.repository_owner }}
           VCS__PIPELINE__REPO: ${{ github.event.repository.name }}
           VCS__PIPELINE__PULL_NUMBER: ${{ inputs.pull-request-number }}
-          
-          # Для отладки
-          LOG_LEVEL: "DEBUG"
 
         with:
-          # Самый простой тип ревью для начала
-          review-command: "run-context"
-          
-      # 6. Логируем результат
-      - name: 📝 Log completion
-        run: |
-          echo "🎉 AI Review выполнен!"
-          echo "Проверьте комментарии в вашем Pull Request #${{ inputs.pull-request-number }}"
-          echo ""
-          echo "Если комментариев нет, проверьте:"
-          echo "1. Права GITHUB_TOKEN (Settings → Actions → General)"
-          echo "2. Номер PR указан правильно"
-          echo "3. Модель загрузилась (см. шаг 3)"
+          # Тип запускаемого ревью: полный, только inline или summary
+          review-command: ${{ inputs.review-command }}
