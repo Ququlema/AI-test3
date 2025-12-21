@@ -1,0 +1,15 @@
+llm:
+  provider: OLLAMA
+  meta:
+    model: mistral
+    max_tokens: 1024
+    temperature: 0.2
+  http_client:
+    api_url: http://localhost:11434
+    timeout: 600
+
+vcs:
+  provider: GITHUB
+  http_client:
+    api_url: https://api.github.com
+    timeout: 120
